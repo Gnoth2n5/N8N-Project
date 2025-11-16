@@ -258,6 +258,7 @@
       ],
       "id": "c4209669-8b4b-456c-9a17-e10f6f41532d",
       "name": "Thêm đữ liệu vào sheet danh sách công việc đã crawl",
+      "onError": "continueRegularOutput",
       "credentials": {
         "googleSheetsOAuth2Api": {
           "id": "KWvXTlQdV9eqObfN",
@@ -352,7 +353,8 @@
       "id": "363bb94e-1f71-445a-bab6-2d8cfa8ed8d3",
       "name": "Lặp lại xử lý",
       "retryOnFail": true,
-      "waitBetweenTries": 2000
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
@@ -424,7 +426,8 @@
         48
       ],
       "id": "0667db85-6756-4efd-aa39-ab1bcbf85c8c",
-      "name": "Truy cập link lấy thông tin"
+      "name": "Truy cập link lấy thông tin",
+      "onError": "continueRegularOutput"
     }
   ],
   "pinData": {},
