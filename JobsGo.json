@@ -1,0 +1,550 @@
+{
+  "name": "JobsGo",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2592,
+        112
+      ],
+      "id": "210d4288-fb65-4f57-bcde-6151d54cad13",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "operation": "clear",
+        "documentId": {
+          "__rl": true,
+          "value": "1_Kp74rA_Ndx8-aEC7V5-mEzs2F61gRhjuy4wfa8cOnc",
+          "mode": "list",
+          "cachedResultName": "JobsGo",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1_Kp74rA_Ndx8-aEC7V5-mEzs2F61gRhjuy4wfa8cOnc/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1293046103,
+          "mode": "list",
+          "cachedResultName": "danh sách công việc đã crawl",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1_Kp74rA_Ndx8-aEC7V5-mEzs2F61gRhjuy4wfa8cOnc/edit#gid=1293046103"
+        },
+        "keepFirstRow": true
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -2336,
+        -240
+      ],
+      "id": "64182b9b-9357-4a66-b561-5eb444861a30",
+      "name": "Xóa danh sách công việc đã crawl",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "KWvXTlQdV9eqObfN",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1_Kp74rA_Ndx8-aEC7V5-mEzs2F61gRhjuy4wfa8cOnc",
+          "mode": "list",
+          "cachedResultName": "JobsGo",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1_Kp74rA_Ndx8-aEC7V5-mEzs2F61gRhjuy4wfa8cOnc/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "list url cần crawl",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1_Kp74rA_Ndx8-aEC7V5-mEzs2F61gRhjuy4wfa8cOnc/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -2336,
+        112
+      ],
+      "id": "1a4b573c-aceb-4cc5-b3e0-ee07b0123fdc",
+      "name": "Lấy đữ liệu sheet list url cần crawl",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "KWvXTlQdV9eqObfN",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "runCustomScript",
+        "scriptCode": "// Helper\nconst sleep = (ms) => new Promise((res) => setTimeout(res, ms));\n\n// Lấy input\nlet baseUrl = $json.Url?.trim();\nif (!baseUrl) throw new Error(\"❌ Thiếu 'Url' trong input!\");\n\nlet major = $json.Major || $json.major || \"\";\nconst MAX_PAGES = parseInt($json.MaxPages || $json.maxPages || \"5\");\nconst MAX_JOBS = parseInt($json.MaxJobs || $json.maxJobs || \"10\");\n\nlet allJobs = [];\nlet currentPage = 1;\n\n// Tối ưu request\nawait $page.setRequestInterception(true);\n$page.on(\"request\", (req) => {\n  const t = req.resourceType();\n  const u = req.url();\n  if ([\"image\", \"font\", \"media\"].includes(t) || /doubleclick|googletagmanager|analytics|facebook|adsystem|adservice|hotjar|mixpanel/i.test(u)) {\n    return req.abort();\n  }\n  req.continue();\n});\n\nwhile (true) {\n  // Tạo URL phân trang\n  let Url = baseUrl;\n  if (currentPage > 1) {\n    Url = baseUrl.includes(\"?\") ? `${baseUrl}&page=${currentPage}` : `${baseUrl}?page=${currentPage}`;\n  }\n\n  console.log(`🟦 Trang ${currentPage}: ${Url}`);\n\n  // Đi đến trang\n  await $page.goto(Url, { waitUntil: \"domcontentloaded\", timeout: 30000 });\n\n  // Đợi job cards xuất hiện - theo cấu trúc HTML trong ảnh\n  try {\n    await $page.waitForSelector(\".col-grid .card.job-card, .job-card\", { timeout: 15000 });\n  } catch {\n    console.log(`⚠️ Không thấy job ở trang ${currentPage}`);\n    break;\n  }\n\n  // Cuộn để load hết\n  let lastCount = 0;\n  let noChangeCount = 0;\n  for (let i = 0; i < 10; i++) {\n    await $page.evaluate(() => window.scrollBy(0, document.body.scrollHeight));\n    await sleep(500);\n    const currentCount = await $page.$$eval(\".col-grid .card.job-card, .job-card\", (els) => els.length);\n    if (currentCount === lastCount) {\n      noChangeCount++;\n      if (noChangeCount >= 2) break;\n    } else {\n      noChangeCount = 0;\n    }\n    lastCount = currentCount;\n  }\n\n  // Lấy dữ liệu - target đúng HTML structure theo ảnh\n  const jobsOnPage = await $page.evaluate(() => {\n    // Tìm tất cả job cards: .col-grid chứa .card.job-card\n    const jobCards = document.querySelectorAll(\".col-grid .card.job-card, .card.job-card\");\n    const uniqueJobs = new Map();\n    \n    jobCards.forEach((card) => {\n      // Tìm link: a[href*='/viec-lam/'] trong card\n      const linkEl = card.querySelector(\"a[href*='/viec-lam/']\");\n      if (!linkEl) return;\n      \n      const href = linkEl.getAttribute(\"href\") || linkEl.href || \"\";\n      if (!href || href.includes(\"#\")) return;\n      \n      // Chuẩn hóa URL\n      let fullUrl = href;\n      if (href.startsWith(\"/\")) {\n        fullUrl = \"https://jobsgo.vn\" + href;\n      }\n      \n      // Lấy tiêu đề\n      const title = linkEl.textContent?.trim() || card.querySelector(\"h2, h3, .title, .job-title\")?.textContent?.trim() || \"\";\n      \n      // Tìm lương đơn giản - không dùng regex phức tạp\n      let salary = \"\";\n      const salaryEl = card.querySelector(\".salary, [class*='salary'], [class*='luong'], .wage, [class*='wage']\");\n      if (salaryEl) {\n        salary = salaryEl.textContent?.trim() || \"\";\n      }\n      \n      if (fullUrl && !uniqueJobs.has(fullUrl)) {\n        uniqueJobs.set(fullUrl, { Url: fullUrl, title: title || \"Không có tiêu đề\", salary: salary });\n      }\n    });\n    \n    // Lọc job có lương hợp lệ\n    const filteredJobs = Array.from(uniqueJobs.values()).filter(job => {\n      if (!job.salary || job.salary.trim() === \"\") {\n        return true; // Giữ lại nếu không có lương để check ở loop 2\n      }\n      \n      const salaryLower = job.salary.toLowerCase().trim();\n      \n      // Bỏ qua các từ khóa không hợp lệ\n      const skipKeywords = [\"đang cập nhật\", \"cập nhật\", \"không xác định\", \"thỏa thuận\", \"flex\", \"flexible\"];\n      const shouldSkip = skipKeywords.some(keyword => salaryLower.includes(keyword));\n      \n      if (shouldSkip) {\n        return false;\n      }\n      \n      return true;\n    });\n    \n    return filteredJobs;\n  });\n\n  console.log(`✅ Trang ${currentPage} có ${jobsOnPage.length} job`);\n  if (jobsOnPage.length === 0) break;\n\n  // Gắn Source + Major\n  const mappedJobs = jobsOnPage.map((j) => ({\n    Source: baseUrl,\n    Url: j.Url,\n    link: j.Url,\n    title: j.title,\n    Major: major\n  }));\n\n  allJobs.push(...mappedJobs);\n\n  // Kiểm tra giới hạn\n  if (allJobs.length >= MAX_JOBS) {\n    console.log(`🛑 Đã đạt giới hạn ${MAX_JOBS} job`);\n    allJobs = allJobs.slice(0, MAX_JOBS);\n    break;\n  }\n\n  if (currentPage >= MAX_PAGES) {\n    console.log(`🛑 Đã đạt giới hạn ${MAX_PAGES} trang`);\n    break;\n  }\n\n  // Kiểm tra còn trang không\n  const nextExists = await $page.evaluate(() => {\n    return !!(\n      document.querySelector(\".pagination .next:not(.disabled)\") ||\n      document.querySelector(\"a[href*='page=']:not([href*='page=1'])\") ||\n      document.querySelector(\".next-page, .pagination-next\")\n    );\n  });\n  \n  if (!nextExists) {\n    console.log(\"🛑 Hết trang\");\n    break;\n  }\n\n  currentPage++;\n  await sleep(800);\n}\n\nconsole.log(\"🎯 Tổng số việc làm:\", allJobs.length);\n\nreturn allJobs.map(job => ({ json: job }));",
+        "options": {
+          "args": [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-accelerated-2d-canvas",
+            "--no-first-run",
+            "--no-zygote",
+            "--disable-gpu"
+          ]
+        }
+      },
+      "type": "n8n-nodes-puppeteer.puppeteer",
+      "typeVersion": 1,
+      "position": [
+        -1728,
+        208
+      ],
+      "id": "30a8ac7e-43fb-4878-92d3-3f6af0f4fe32",
+      "name": "Truy cập vào link lấy ra công việc",
+      "alwaysOutputData": true,
+      "executeOnce": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1_Kp74rA_Ndx8-aEC7V5-mEzs2F61gRhjuy4wfa8cOnc",
+          "mode": "list",
+          "cachedResultName": "JobsGo",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1_Kp74rA_Ndx8-aEC7V5-mEzs2F61gRhjuy4wfa8cOnc/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1293046103,
+          "mode": "list",
+          "cachedResultName": "danh sách công việc đã crawl",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1i077qGPoAgK1XLcbCLziqppsyFjwllMOpevn06Y1tXM/edit#gid=1293046103"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Lương": "={{ $json[\"Lương\"] }}",
+            "Trình độ": "={{ $json[\"Trình độ\"] }}",
+            "Số lượng": "={{ $json[\"Số lượng\"] }}",
+            "Kinh nghiệm": "={{ $json[\"Kinh nghiệm\"] }}",
+            "Ngày đăng": "={{ $json[\"Ngày đăng\"] }}",
+            "Vị trí": "={{ $json[\"Vị trí\"] }}",
+            "Hạn tuyển dụng": "={{ $json[\"Hạn tuyển dụng\"] }}",
+            "Chuyên ngành": "={{ $json[\"Chuyên ngành\"] }}",
+            "Tiêu đề công việc": "={{ $json[\"Tiêu đề công việc\"] }}",
+            "Tên công ty": "={{ $json[\"Tên công ty\"] }}",
+            "Link": "={{ $json.Link }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Tiêu đề công việc",
+              "displayName": "Tiêu đề công việc",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Tên công ty",
+              "displayName": "Tên công ty",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Link",
+              "displayName": "Link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Lương",
+              "displayName": "Lương",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Trình độ",
+              "displayName": "Trình độ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Vị trí",
+              "displayName": "Vị trí",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Kinh nghiệm",
+              "displayName": "Kinh nghiệm",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Số lượng",
+              "displayName": "Số lượng",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Ngày đăng",
+              "displayName": "Ngày đăng",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Hạn tuyển dụng",
+              "displayName": "Hạn tuyển dụng",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Chuyên ngành",
+              "displayName": "Chuyên ngành",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -176,
+        -192
+      ],
+      "id": "58d72109-1981-4aa3-8150-e0bc7faa5a71",
+      "name": "Thêm đữ liệu vào sheet danh sách công việc đã crawl",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "KWvXTlQdV9eqObfN",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1_Kp74rA_Ndx8-aEC7V5-mEzs2F61gRhjuy4wfa8cOnc",
+          "mode": "list",
+          "cachedResultName": "JobsGo",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1_Kp74rA_Ndx8-aEC7V5-mEzs2F61gRhjuy4wfa8cOnc/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 2020572363,
+          "mode": "list",
+          "cachedResultName": "list link tuyển dụng ",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1i077qGPoAgK1XLcbCLziqppsyFjwllMOpevn06Y1tXM/edit#gid=2020572363"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Url": "={{$json.link }}",
+            "Source": "={{ $json.Source }}",
+            "Major": "={{ $json.Major }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Url",
+              "displayName": "Url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Major",
+              "displayName": "Major",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -1280,
+        208
+      ],
+      "id": "63f61b45-6493-4d14-9af7-57695463bc31",
+      "name": "Thêm đữ liệu vào sheet list link tuyển dụng",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "KWvXTlQdV9eqObfN",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -416,
+        96
+      ],
+      "id": "a0e10a58-828d-47c2-be9a-76f46b2901ef",
+      "name": "Lặp lại xử lý",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -2064,
+        112
+      ],
+      "id": "f32bec6d-f491-422e-a386-3460432697d0",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "operation": "clear",
+        "documentId": {
+          "__rl": true,
+          "value": "1_Kp74rA_Ndx8-aEC7V5-mEzs2F61gRhjuy4wfa8cOnc",
+          "mode": "list",
+          "cachedResultName": "JobsGo",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1_Kp74rA_Ndx8-aEC7V5-mEzs2F61gRhjuy4wfa8cOnc/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 2020572363,
+          "mode": "list",
+          "cachedResultName": "list link tuyển dụng ",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1_Kp74rA_Ndx8-aEC7V5-mEzs2F61gRhjuy4wfa8cOnc/edit#gid=2020572363"
+        },
+        "keepFirstRow": true
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -2336,
+        -80
+      ],
+      "id": "e4485113-86d7-4e4c-b035-8908ce6de03a",
+      "name": "Xóa đữ liệu của sheet list link tuyển dụng",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "KWvXTlQdV9eqObfN",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "runCustomScript",
+        "scriptCode": "// 🟩 Bọc toàn bộ trong try-catch để bỏ qua link lỗi\ntry {\n// Lấy biến từ input\nconst { Url, Major } = $json;\n\n// Chuẩn hóa URL\nlet jobUrl = (Url || \"\").trim();\nif (!jobUrl) {\n  console.log(\"⚠️ Bỏ qua: Không có URL hợp lệ\");\n  return [];\n}\nif (jobUrl.startsWith(\"/\")) jobUrl = \"https://jobsgo.vn\" + jobUrl;\n\n// 🟩 Thêm User-Agent để tránh bị chặn\nawait $page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');\n\n// 🟩 Thêm extra headers\nawait $page.setExtraHTTPHeaders({\n  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',\n  'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',\n  'Accept-Encoding': 'gzip, deflate, br',\n  'Connection': 'keep-alive',\n  'Upgrade-Insecure-Requests': '1'\n});\n\n// Tối ưu request\nawait $page.setRequestInterception(true);\n$page.on(\"request\", (req) => {\n  const t = req.resourceType();\n  const u = req.url();\n  if ([\"image\", \"font\", \"media\"].includes(t) || /doubleclick|googletagmanager|analytics|facebook|adsystem|adservice|hotjar|mixpanel/i.test(u)) {\n    return req.abort();\n  }\n  req.continue();\n});\n\n// 🟩 Delay trước khi truy cập để tránh bị chặn\nawait new Promise(r => setTimeout(r, 1000 + Math.random() * 2000));\n\n// 🟩 Retry logic với exponential backoff\nlet retries = 3;\nlet lastError = null;\nwhile (retries > 0) {\n  try {\n    // 🟩 Truy cập trang với timeout tăng lên\n    await $page.goto(jobUrl, { \n      waitUntil: \"networkidle2\", \n      timeout: 60000 \n    });\n    break; // Thành công, thoát khỏi retry loop\n  } catch (error) {\n    lastError = error;\n    retries--;\n    if (retries > 0) {\n      const delay = Math.pow(2, 3 - retries) * 2000; // 2s, 4s, 8s\n      console.log(`⚠️ Lỗi khi truy cập ${jobUrl}, retry sau ${delay}ms... (còn ${retries} lần)`);\n      await new Promise(r => setTimeout(r, delay));\n    } else {\n      console.log(`❌ Không thể truy cập ${jobUrl} sau 3 lần thử`);\n      // Thử với domcontentloaded nếu networkidle2 fail\n      try {\n        await $page.goto(jobUrl, { waitUntil: \"domcontentloaded\", timeout: 30000 });\n      } catch (e) {\n        console.log(`❌ Bỏ qua link ${jobUrl} do lỗi: ${lastError.message}`);\n        return []; // Bỏ qua link này, tiếp tục với link khác\n      }\n    }\n  }\n}\n\n// 🟩 Chờ trang load hoàn toàn\nawait new Promise(r => setTimeout(r, 2000));\n\n// Chờ tiêu đề xuất hiện - tăng timeout\ntry {\n  await $page.waitForSelector(\"h1.job-title, body\", { timeout: 30000 });\n} catch (e) {\n  console.log(\"⚠️ Không tìm thấy tiêu đề, tiếp tục...\");\n  // Kiểm tra xem có bị redirect hoặc block không\n  const currentUrl = $page.url();\n  if (currentUrl.includes('blocked') || currentUrl.includes('error') || currentUrl !== jobUrl) {\n    console.log(`⚠️ URL bị thay đổi: ${currentUrl} (gốc: ${jobUrl})`);\n  }\n}\n\n// Cuộn để tải hết nội dung\nawait $page.evaluate(async () => {\n  await new Promise(res => {\n    let y = 0;\n    const step = 1000;\n    const t = setInterval(() => {\n      window.scrollBy(0, step);\n      y += step;\n      if (y > document.body.scrollHeight + 1200) {\n        clearInterval(t);\n        res();\n      }\n    }, 80);\n  });\n});\nawait new Promise(r => setTimeout(r, 300));\n\n// Thu thập dữ liệu - target đúng HTML structure của jobsgo.vn\nconst job = await $page.evaluate((Major) => {\n  const get = (sel) => {\n    try {\n      const el = document.querySelector(sel);\n      return el?.textContent?.trim() || null;\n    } catch { return null; }\n  };\n  \n  // Hàm tìm thông tin trong .card-body theo label\n  const findByLabel = (labels) => {\n    const cols = document.querySelectorAll(\".card-body .col-6, .card-body .col-md-4\");\n    for (const col of cols) {\n      const labelEl = col.querySelector(\".text-muted\");\n      if (!labelEl) continue;\n      const labelText = labelEl.textContent?.trim() || \"\";\n      for (const label of labels) {\n        if (labelText.toLowerCase().includes(label.toLowerCase())) {\n          const strongEl = col.querySelector(\"strong\");\n          if (strongEl) {\n            return strongEl.textContent?.trim() || \"\";\n          }\n        }\n      }\n    }\n    return null;\n  };\n\n  // Lấy tiêu đề\n  const title = get(\"h1.job-title\") || \"Không xác định\";\n\n  // Lấy tên công ty\n  let company = get(\".card-company h6.fw-semibold\") || get(\".company-logo + .flex-grow-1 h6\") || \"Không xác định\";\n  company = company.trim();\n\n  // Lấy lương từ .job-info-list\n  let salary = null;\n  const jobInfoList = document.querySelector(\".job-info-list\");\n  if (jobInfoList) {\n    const salaryLi = Array.from(jobInfoList.querySelectorAll(\"li\")).find(li => {\n      return li.textContent?.includes(\"Mức lương\") || li.textContent?.includes(\"lương\");\n    });\n    if (salaryLi) {\n      const strongEl = salaryLi.querySelector(\"strong\");\n      if (strongEl) {\n        salary = strongEl.textContent?.trim() || \"\";\n      }\n    }\n  }\n  if (!salary) salary = \"\";\n\n  // Lấy các thông tin từ .card-body\n  const education = findByLabel([\"Yêu cầu bằng cấp\", \"bằng cấp\", \"Trình độ\"]) || \"\";\n  const position = findByLabel([\"Vị trí/chức vụ\", \"Vị trí\", \"Chức vụ\"]) || \"\";\n  const experience = findByLabel([\"Yêu cầu kinh nghiệm\", \"Kinh nghiệm\"]) || \"\";\n  \n  // Lấy ngày đăng\n  const postedDate = findByLabel([\"Ngày đăng tuyển\", \"Ngày đăng\"]) || \"\";\n  \n  // Lấy hạn nộp từ .job-info-list\n  let deadline = null;\n  if (jobInfoList) {\n    const deadlineLi = Array.from(jobInfoList.querySelectorAll(\"li\")).find(li => {\n      return li.textContent?.includes(\"Hạn nộp\") || li.textContent?.includes(\"Hết hạn\");\n    });\n    if (deadlineLi) {\n      const strongEl = deadlineLi.querySelector(\"strong\");\n      if (strongEl) {\n        deadline = strongEl.textContent?.trim() || \"\";\n      }\n    }\n  }\n  if (!deadline) deadline = \"\";\n  \n  // Số lượng - có thể không có trong HTML\n  const quantity = \"\";\n\n  // Làm sạch dữ liệu\n  const cleanText = (text) => {\n    if (!text) return \"\";\n    return text.trim();\n  };\n\n  return {\n    title: cleanText(title),\n    company: cleanText(company),\n    salary: cleanText(salary),\n    education: cleanText(education),\n    position: cleanText(position),\n    experience: cleanText(experience),\n    quantity: cleanText(quantity),\n    postedDate: cleanText(postedDate),\n    deadline: cleanText(deadline),\n    major: Major || \"\",\n    link: window.location.href\n  };\n}, Major);\n\n// Trả kết quả\nreturn [\n  {\n    json: {\n      \"Tiêu đề công việc\": job.title,\n      \"Tên công ty\": job.company,\n      \"Link\": job.link,\n      \"Lương\": job.salary,\n      \"Trình độ\": job.education,\n      \"Vị trí\": job.position,\n      \"Kinh nghiệm\": job.experience,\n      \"Số lượng\": job.quantity,\n      \"Ngày đăng\": job.postedDate,\n      \"Hạn tuyển dụng\": job.deadline,\n      \"Chuyên ngành\": job.major,\n    },\n  },\n];\n\n} catch (error) {\n  // 🟩 Bỏ qua link lỗi, log và tiếp tục với link khác\n  console.log(`❌ Lỗi khi xử lý link ${$json.Url || 'unknown'}: ${error.message}`);\n  return []; // Trả về empty để bỏ qua link này\n}",
+        "options": {
+          "args": [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-accelerated-2d-canvas",
+            "--no-first-run",
+            "--no-zygote",
+            "--disable-gpu"
+          ]
+        }
+      },
+      "type": "n8n-nodes-puppeteer.puppeteer",
+      "typeVersion": 1,
+      "position": [
+        -848,
+        -192
+      ],
+      "id": "1cf239b2-bbd5-4211-b5e7-897ab07e2173",
+      "name": "Truy cập link lấy thông tin"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Lấy đữ liệu sheet list url cần crawl",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Xóa đữ liệu của sheet list link tuyển dụng",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Xóa danh sách công việc đã crawl",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lấy đữ liệu sheet list url cần crawl": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Truy cập vào link lấy ra công việc": {
+      "main": [
+        [
+          {
+            "node": "Thêm đữ liệu vào sheet list link tuyển dụng",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Thêm đữ liệu vào sheet list link tuyển dụng": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Thêm đữ liệu vào sheet danh sách công việc đã crawl": {
+      "main": [
+        [
+          {
+            "node": "Lặp lại xử lý",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lặp lại xử lý": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Truy cập link lấy thông tin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Lặp lại xử lý",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Truy cập vào link lấy ra công việc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Truy cập link lấy thông tin": {
+      "main": [
+        [
+          {
+            "node": "Thêm đữ liệu vào sheet danh sách công việc đã crawl",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "c0d9abc4-59e5-4be0-8d13-27aee719f929",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "be4bd479f567f96620153db3fcd673abbd059c76f34103f7251e61fb5e9ec621"
+  },
+  "id": "YXE0QQUhm8K4SQdx",
+  "tags": []
+}
